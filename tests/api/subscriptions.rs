@@ -18,6 +18,8 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
         .await
         .expect("Failed to fetch saved subscription.");
 
+    app.cleanup();
+
     assert_eq!(saved.email, "ursula_le_guin@gmail.com");
     assert_eq!(saved.name, "le guin");
 }
@@ -32,6 +34,8 @@ async fn subscribe_returns_a_400_when_data_is_missing() {
         ("email=ursula_le_guin%40gmail.com", "missing the name"),
         ("", "missing both name and email"),
     ];
+
+    app.cleanup();
 
     for (invalid_body, error_message) in test_cases {
         // Act
@@ -58,6 +62,8 @@ async fn subscribe_returns_a_400_when_fields_are_present_but_invalid() {
         ("name=Ursula&email=", "empty email"),
         ("name=Ursula&email=definitely-not-an-email", "invalid email"),
     ];
+
+    app.cleanup();
 
     for (body, description) in test_cases {
         // Act

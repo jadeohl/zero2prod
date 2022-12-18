@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
+use tokio::time::{sleep_until, Duration, Instant};
 use uuid::Uuid;
 use zero2prod::configuration::{get_configuration, DatabaseSettings};
 use zero2prod::startup::{get_connection_pool, Application};
@@ -21,6 +22,7 @@ static TRACING: Lazy<()> = Lazy::new(|| {
 pub struct TestApp {
     pub address: String,
     pub db_pool: PgPool,
+    pub db_name: String,
 }
 
 impl TestApp {
@@ -33,16 +35,34 @@ impl TestApp {
             .await
             .expect("Failed to execute request.")
     }
+
+    pub async fn cleanup(&self) -> std::io::Result<()> {
+        self.db_pool.close().await;
+
+        sleep_until(Instant::now() + Duration::from_millis(100)).await;
+
+        let configuration = {
+            let mut c = get_configuration().expect("Failed to read configuration.");
+            c.application.port = 0;
+            c
+        };
+
+        delete_database(&configuration.database, &self.db_name).await?;
+
+        Ok(())
+    }
 }
 
 pub async fn spawn_app() -> TestApp {
     Lazy::force(&TRACING);
 
+    let db_name = Uuid::new_v4().to_string();
+
     // Randomise configuration to ensure test isolation
     let configuration = {
         let mut c = get_configuration().expect("Failed to read configuration.");
         // Use a different database for each test case
-        c.database.database_name = Uuid::new_v4().to_string();
+        c.database.database_name = db_name.clone();
         // Use a random OS port
         c.application.port = 0;
         c
@@ -61,6 +81,7 @@ pub async fn spawn_app() -> TestApp {
     TestApp {
         address,
         db_pool: get_connection_pool(&configuration.database),
+        db_name,
     }
 }
 
@@ -84,4 +105,37 @@ async fn configure_database(config: &DatabaseSettings) -> PgPool {
         .expect("Failed to migrate the database");
 
     connection_pool
+}
+
+async fn delete_database(config: &DatabaseSettings, db_name: &str) -> std::io::Result<()> {
+    let mut connection = PgConnection::connect_with(&config.without_db())
+        .await
+        .expect("Failed to connect to Postgres");
+
+    connection
+        .execute(&*format!(
+            r#"REVOKE CONNECT ON DATABASE "{}" FROM public;"#,
+            db_name
+        ))
+        .await
+        .expect("Failed to revoke connections.");
+
+    connection
+        .execute(&*format!(
+            r#"
+            SELECT pg_terminate_backend(pg_stat_activity.pid)
+            FROM pg_stat_activity
+            WHERE pg_stat_activity.datname = '"{}"';
+            "#,
+            db_name
+        ))
+        .await
+        .expect("Failed to close activity.");
+
+    connection
+        .execute(&*format!(r#"DROP DATABASE "{}";"#, db_name))
+        .await
+        .expect("Failed to delete database.");
+
+    Ok(())
 }
