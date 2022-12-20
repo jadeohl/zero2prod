@@ -37,22 +37,6 @@ impl TestApp {
             .await
             .expect("Failed to execute request.")
     }
-
-    pub async fn cleanup(&self) -> std::io::Result<()> {
-        self.db_pool.close().await;
-
-        sleep_until(Instant::now() + Duration::from_millis(100)).await;
-
-        let configuration = {
-            let mut c = get_configuration().expect("Failed to read configuration.");
-            c.application.port = 0;
-            c
-        };
-
-        delete_database(&configuration.database, &self.db_name).await?;
-
-        Ok(())
-    }
 }
 
 pub async fn spawn_app() -> TestApp {
@@ -111,37 +95,4 @@ async fn configure_database(config: &DatabaseSettings) -> PgPool {
         .expect("Failed to migrate the database");
 
     connection_pool
-}
-
-async fn delete_database(config: &DatabaseSettings, db_name: &str) -> std::io::Result<()> {
-    let mut connection = PgConnection::connect_with(&config.without_db())
-        .await
-        .expect("Failed to connect to Postgres");
-
-    connection
-        .execute(&*format!(
-            r#"REVOKE CONNECT ON DATABASE "{}" FROM public;"#,
-            db_name
-        ))
-        .await
-        .expect("Failed to revoke connections.");
-
-    connection
-        .execute(&*format!(
-            r#"
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '"{}"';
-            "#,
-            db_name
-        ))
-        .await
-        .expect("Failed to close activity.");
-
-    connection
-        .execute(&*format!(r#"DROP DATABASE "{}";"#, db_name))
-        .await
-        .expect("Failed to delete database.");
-
-    Ok(())
 }
